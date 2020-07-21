@@ -7,7 +7,7 @@ from helper import *
 
 
 # Load data 
-with open('data/pt3_data.pkl', 'rb') as file:
+with open('data/pt1_data.pkl', 'rb') as file:
     data = pickle.load(file)
 
 
@@ -52,6 +52,9 @@ var_imu_f = 0.01
 var_imu_w = 0.01
 var_gnss = 10.0
 var_lidar = 1.0
+# Square them...
+var_f = var_imu_f**2
+var_w = var_imu_w**2
 
 g = np.array([0, 0, -9.81]) # Gravity vector
 L = np.zeros([9, 6])
@@ -70,7 +73,6 @@ v_est = np.zeros([imu_f.data.shape[0], 3])      # velocity estimates
 q_est = np.zeros([imu_f.data.shape[0], 4])      # orientation estimates as quaternions
 P_cov = np.zeros([imu_f.data.shape[0], 9, 9])   # covariance matrices at each timestep
 
-
 # Initial values -- taken from ground truth.
 p_est[0] = gt.p[0]
 v_est[0] = gt.v[0]
@@ -85,22 +87,76 @@ P_cov[0] = np.zeros(9)  # covariance of estimate
 gnss_i = 0
 lidar_i = 0
 
+# Measurement Update:
+def measurement_update(sensor_var, P_cov_est, y_k, p_est, v_est, q_est):
+    # Covariance matrix of the sensor
+    R = np.identity(3) * sensor_var  
+
+    # Compute Kalman Gain:
+    K = P_cov_est.dot(H.T).dot(np.linalg.inv(H.dot(P_cov_est).dot(H.T) + R))
+
+    # Compute the error state:
+    dx = K.dot(y_k - p_est)
+    
+    # Correct the predicted state
+    dp = dx[:3]
+    dv = dx[3:6]
+    dphi = dx[6:]
+
+    p_upd = p_est + dp
+    v_upd = v_est + dp
+    q_upd = Quaternion(euler=dphi).quat_mul(q_est)
+
+    # Correct the covariance:
+    P_cov_upd = (np.identity(9) - K.dot(H)).dot(P_cov_est)
+
+    return p_upd, v_upd, q_upd, P_cov_upd
 
 ### Main loop:
 
 for k in range(1, imu_f.data.shape[0]):
     delta_t = imu_f.t[k] - imu_f.t[k-1] # time is given in imu_f
 
-# 1. Prediction 
+    # 1. Prediction 
     # 1.1 Get Rotation matrix from quaternion
-    rotation_matrix = Quaternion(*q_est[k-1]).to_mat() 
+    C_ns = Quaternion(*q_est[k-1]).to_mat() 
     # print(rotation_matrix)
 
     # 1.2 Estimate the motion
-    accel = rotation_matrix.dot(imu_f.data[k-1]) + g
-    p_est[k] = p_est[k-1]+delta_t*v_est[k-1] + ((delta_t**2)/2)*accel
+    accel = C_ns.dot(imu_f.data[k-1]) + g
+    p_est[k] = p_est[k-1]+delta_t*v_est[k-1] + 0.5*(delta_t**2)*accel
     v_est[k] = v_est[k-1] + delta_t*accel
-    q_est[k] = Quaternion(axis_angle=imf_w.data[k-1]*delta_t).
-    print(p_est[k])
-    print(v_est[k])
-    
+    q_est[k] = Quaternion(axis_angle=imf_w.data[k-1]*delta_t).quat_mul(q_est[k-1])
+
+    # 2. Propagate uncertainty
+
+    F = np.identity(9)
+    Q = np.identity(6)
+
+    # F matrix
+    F[0:3, 3:6] = delta_t * np.identity(3)
+    F[3:6,6:9] = skew_symmetric(np.dot(C_ns,imu_f.data[k-1]).reshape(3,1))
+
+    # Q noise matrix
+    Q = delta_t**2 * np.diag([var_f, var_f, var_f, var_w, var_w, var_w])
+
+    P_cov[k] = (F.dot(P_cov[k-1])).dot(F.T) + (L.dot(Q)).dot(L.T)
+
+    if lidar_i < lidar.t.shape[0] and lidar.t[lidar_i] == imu_f.t[k-1]:
+        p_est[k], v_est[k], q_est[k], P_cov[k] = measurement_update(var_lidar, P_cov[k], lidar.data[lidar_i].T, p_est[k], v_est[k], q_est[k])
+        lidar_i += 1
+    if gnss_i < gnss.t.shape[0] and gnss.t[gnss_i] == imu_f.t[k-1]:
+        p_est[k], v_est[k], q_est[k], P_cov[k] = measurement_update(var_gnss, P_cov[k], gnss.data[gnss_i].T, p_est[k], v_est[k], q_est[k])
+        gnss_i += 1
+
+est_traj_fig = plt.figure()
+ax = est_traj_fig.add_subplot(111, projection='3d')
+ax.plot(p_est[:,0], p_est[:,1], p_est[:,2], label='Estimated')
+ax.plot(gt.p[:,0], gt.p[:,1], gt.p[:,2], label='Ground Truth')
+ax.set_xlabel('x [m]')
+ax.set_ylabel('y [m]')
+ax.set_zlabel('z [m]')
+ax.set_title('Final Estimated Trajectory')
+ax.legend()
+ax.set_zlim(-1, 5)
+plt.show()

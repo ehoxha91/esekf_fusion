@@ -77,3 +77,27 @@ class Quaternion():
         R[2,2] = 1 - 2*(qx2 + qy2)
 
         return R
+
+    def quat_mul(self, q, out='np', right=True):
+        v = np.array([self.x, self.y, self.z]).reshape(3, 1)
+        sum_term = np.zeros([4,4])
+        sum_term[0,1:] = -v[:,0]
+        sum_term[1:, 0] = v[:,0]
+
+        if right is True:
+            sum_term[1:, 1:] = -skew_symmetric(v)
+        else:
+            sum_term[1:, 1:] = skew_symmetric(v)
+
+        sigma = self.w * np.eye(4) + sum_term
+
+        if type(q).__name__ == "Quaternion":
+            quat_np = np.dot(sigma, q.to_numpy())
+        else:
+            quat_np = np.dot(sigma, q)
+
+        if out == 'np':
+            return quat_np
+        elif out == 'Quaternion':
+            quat_obj = Quaternion(quat_np[0], quat_np[1], quat_np[2], quat_np[3])
+            return quat_obj
