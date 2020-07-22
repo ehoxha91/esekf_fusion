@@ -5,33 +5,12 @@ from mpl_toolkits.mplot3d import Axes3D
 from helper import *
 
 # Load data 
-with open('data/pt3_data.pkl', 'rb') as file:
+with open('data/pt1_data.pkl', 'rb') as file:
     data = pickle.load(file)
 
 gt = data['gt']         # 6DOF Pose ground truth.
 imu_f = data['imu_f']   # IMU accelerometer measurements
 imf_w = data['imu_w']   # IMU gyroscope measurements
-gnss = data['gnss']     # GPS measured position.
-lidar = data['lidar']   # Lidar measured position. 
-
-# Print a row of data just to understand what we have as input.
-# print(gt.p[0,:])        # Ground truth p   - [gt_px, gt_py, gt_pz]
-# print(gt.r[0,:])        # Euler angle      - [roll, pitch, yaw]
-# print(imu_f.data[0,:])  # IMU Acceleration - [a_x, a_y, a_z]
-# print(imu_w.data[0,:])  # IMU Gyro rate.   - [g_x, g_y, g_z]
-# print(gnss.data[0,:])   # GPS position     - [g_px, g_py, g_pz]
-# print(lidar.data[0,:])  # Lidar position   - [l_px, l_py, l_pz]
-
-# Plot ground truth:
-# gt_fig = plt.figure()
-# ax = gt_fig.add_subplot(111, projection='3d')
-# ax.plot(gt.p[:,0], gt.p[:,1], gt.p[:,2])
-# ax.set_xlabel('x [m]')
-# ax.set_ylabel('y [m]')
-# ax.set_zlabel('z [m]')
-# ax.set_title('Ground Truth trajectory')
-# ax.set_zlim(-1, 5)
-# plt.show()
 
 # Correct calibration rotation matrix, corresponding to Euler RPY angles (0.05, 0.05, 0.1).
 # Calibration of lidar ... matching the lidar frame with the global frame.
@@ -53,16 +32,28 @@ var_lidar = 1.0
 var_f = var_imu_f**2
 var_w = var_imu_w**2
 
+var_cam = 0.1
+var_enc = 0.1
+
 g = np.array([0, 0, -9.81]) # Gravity vector
 L = np.zeros([18, 12])
 L[3:15, :] = np.eye(12)  # motion model noise jacobian
-H = np.zeros([3, 18])
-H[:, :3] = np.eye(3)  # measurement model jacobian
 
-# print("Motion Model Jacobian:")
-# print(L)
-#print("Measurement Model Jacobian:")
-# print(H)
+H_cam = np.zeros([6, 18])
+H_cam[0:3, 0:3] = np.eye(3)  # measurement model jacobian
+H_cam[3:6, 6:9] = np.eye(3)
+
+H_enc = np.zeros([7,18])
+H_enc[0:3, 0:3] = np.eye(3)
+H_enc[3:6, 3:6] = np.eye(3)
+H_enc[6, 8] = 1
+
+print("Motion Model Jacobian:")
+print(L)
+print("Measurement H_cam:")
+print(H_cam)
+print("Measurement H_enc:")
+print(H_enc)
 
 # Define vectors and matrices
 p_est = np.zeros([imu_f.data.shape[0], 3])      # keep all position history
@@ -71,11 +62,12 @@ q_est = np.zeros([imu_f.data.shape[0], 4])      # orientation estimates as quate
 a_b_est = np.zeros([imu_f.data.shape[0], 3])    # acceleration bias estimate
 w_b_est = np.zeros([imu_f.data.shape[0], 3])    # angular velocity bias estimate
 g_est = np.zeros([imu_f.data.shape[0], 3])      # gravity estimate
-P_cov = np.zeros([imu_f.data.shape[0], 18, 18])   # covariance matrices at each timestep
+P_cov = np.zeros([imu_f.data.shape[0], 18, 18]) # covariance matrices at each timestep
 
 # Initial values -- taken from ground truth.
 p_est[0] = gt.p[0]
 v_est[0] = gt.v[0]
+q_est[0] = Quaternion(euler=gt.r[0]).to_numpy() # As input we have ground truth in euler angles (roll, pitch, yaw)
 a_b_est[0] = gt.p[0]
 w_b_est[0] = gt.p[0]
 g_est[0] = g
@@ -84,25 +76,23 @@ print("Initial Values")
 print("##############")
 print(p_est[0])
 print(v_est[0])
+print(q_est[0])
 print(a_b_est[0])
 print(w_b_est[0])
 print(g_est[0])
-
-# As input we have ground truth in euler angles (roll, pitch, yaw)
-q_est[0] = Quaternion(euler=gt.r[0]).to_numpy()
-# print(q_est[0])
 
 P_cov[0] = np.zeros(18)  # covariance of estimate
 print(P_cov[0])
 print("##############")
 
-gnss_i = 0
-lidar_i = 0
-
 # Measurement Update:
-def measurement_update(sensor_var, P_cov_est, y_k, p_est, v_est, q_est, ab_estimate, wb_estimate, g_estimate):
+def measurement_update(sensor_var, H, P_cov_est, y_k, p_est, v_est, q_est, ab_estimate, wb_estimate, g_estimate, camera=True):
+    
     # Covariance matrix of the sensor
-    R = np.identity(3) * sensor_var  
+    if camera == True:
+        R = np.identity(6) * sensor_var # Covariance of Camera
+    else:
+        R = np.identity(7) * sensor_var # Covariance of Encoder
 
     # Compute Kalman Gain:
     K = P_cov_est.dot(H.T).dot(np.linalg.inv(H.dot(P_cov_est).dot(H.T) + R))
@@ -168,12 +158,15 @@ for k in range(1, imu_f.data.shape[0]):
 
     P_cov[k] = (F.dot(P_cov[k-1])).dot(F.T) + (L.dot(Q)).dot(L.T)
 
-    if lidar_i < lidar.t.shape[0] and lidar.t[lidar_i] == imu_f.t[k-1]:
-        p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k], P_cov[k] = measurement_update(var_lidar, P_cov[k], lidar.data[lidar_i].T, p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k])
-        lidar_i += 1
-    # if gnss_i < gnss.t.shape[0] and gnss.t[gnss_i] == imu_f.t[k-1]:
-    #     p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k], P_cov[k] = measurement_update(var_gnss, P_cov[k], gnss.data[gnss_i].T, p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k])
-    #     gnss_i += 1
+    camera = True   # This is true whenever we have camera measuerment
+    encoder = True  # This is true whenever we have encoder measurement 
+    camera_data = np.array([0, 0, 0, 0, 0, 0])      # [px, py, pz, roll, pitch, yaw]
+    encoder_data = np.array([0, 0, 0, 0, 0, 0, 0])  # [px, py, pz, vx, vy, vz, theta(yaw)]
+
+    if camera == True:
+        p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k], P_cov[k] = measurement_update(var_cam, H_cam, P_cov[k], camera_data, p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k])
+    if encoder == True:
+        p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k], P_cov[k] = measurement_update(var_enc, H_enc, P_cov[k], encoder_data, p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k])
 
 est_traj_fig = plt.figure()
 ax = est_traj_fig.add_subplot(111, projection='3d')
