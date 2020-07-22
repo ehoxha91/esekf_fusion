@@ -54,38 +54,53 @@ var_f = var_imu_f**2
 var_w = var_imu_w**2
 
 g = np.array([0, 0, -9.81]) # Gravity vector
-L = np.zeros([9, 6])
-L[3:, :] = np.eye(6)  # motion model noise jacobian
-H = np.zeros([3, 9])
+L = np.zeros([18, 12])
+L[3:15, :] = np.eye(12)  # motion model noise jacobian
+H = np.zeros([3, 18])
 H[:, :3] = np.eye(3)  # measurement model jacobian
 
-print("Motion Model Jacobian:")
-print(L)
-# print("Measurement Model Jacobian:")
+# print("Motion Model Jacobian:")
+# print(L)
+#print("Measurement Model Jacobian:")
 # print(H)
 
 # Define vectors and matrices
 p_est = np.zeros([imu_f.data.shape[0], 3])      # keep all position history
 v_est = np.zeros([imu_f.data.shape[0], 3])      # velocity estimates
 q_est = np.zeros([imu_f.data.shape[0], 4])      # orientation estimates as quaternions
-P_cov = np.zeros([imu_f.data.shape[0], 9, 9])   # covariance matrices at each timestep
+a_b_est = np.zeros([imu_f.data.shape[0], 3])    # acceleration bias estimate
+w_b_est = np.zeros([imu_f.data.shape[0], 3])    # angular velocity bias estimate
+g_est = np.zeros([imu_f.data.shape[0], 3])      # gravity estimate
+P_cov = np.zeros([imu_f.data.shape[0], 18, 18])   # covariance matrices at each timestep
 
 # Initial values -- taken from ground truth.
 p_est[0] = gt.p[0]
 v_est[0] = gt.v[0]
+a_b_est[0] = gt.p[0]
+w_b_est[0] = gt.p[0]
+g_est[0] = g
+
+print("Initial Values")
+print("##############")
+print(p_est[0])
+print(v_est[0])
+print(a_b_est[0])
+print(w_b_est[0])
+print(g_est[0])
 
 # As input we have ground truth in euler angles (roll, pitch, yaw)
 q_est[0] = Quaternion(euler=gt.r[0]).to_numpy()
 # print(q_est[0])
 
-P_cov[0] = np.zeros(9)  # covariance of estimate
-# print(P_cov[0])
+P_cov[0] = np.zeros(18)  # covariance of estimate
+print(P_cov[0])
+print("##############")
 
 gnss_i = 0
 lidar_i = 0
 
 # Measurement Update:
-def measurement_update(sensor_var, P_cov_est, y_k, p_est, v_est, q_est):
+def measurement_update(sensor_var, P_cov_est, y_k, p_est, v_est, q_est, ab_estimate, wb_estimate, g_estimate):
     # Covariance matrix of the sensor
     R = np.identity(3) * sensor_var  
 
@@ -97,18 +112,23 @@ def measurement_update(sensor_var, P_cov_est, y_k, p_est, v_est, q_est):
     
     # Correct the predicted state
     dp = dx[:3]
-
     dv = dx[3:6]
-    dphi = dx[6:]
+    dphi = dx[6:9]
+    dab = dx[9:12]
+    dwb = dx[12:15]
+    dg = dx[15:]
 
     p_upd = p_est + dp
     v_upd = v_est + dv
     q_upd = Quaternion(euler=dphi).quat_mul(q_est)
+    a_b_upd = ab_estimate + dab
+    w_b_upd = wb_estimate + dwb
+    g_upd = g_estimate + dg
 
     # Correct the covariance:
-    P_cov_upd = (np.identity(9) - K.dot(H)).dot(P_cov_est)
+    P_cov_upd = (np.identity(18) - K.dot(H)).dot(P_cov_est)
 
-    return p_upd, v_upd, q_upd, P_cov_upd
+    return p_upd, v_upd, q_upd, a_b_upd, w_b_upd, g_upd, P_cov_upd
 
 ### Main loop:
 
@@ -125,27 +145,35 @@ for k in range(1, imu_f.data.shape[0]):
     p_est[k] = p_est[k-1]+delta_t*v_est[k-1] + 0.5*(delta_t**2)*accel
     v_est[k] = v_est[k-1] + delta_t*accel
     q_est[k] = Quaternion(axis_angle=imf_w.data[k-1]*delta_t).quat_mul(q_est[k-1])
+    a_b_est[k] = a_b_est[k-1]
+    w_b_est[k] = w_b_est[k-1]
+    g_est[k] = g_est[k-1]
 
     # 2. Propagate uncertainty
 
-    F = np.identity(9)
-    Q = np.identity(6)
+    F = np.identity(18)
+    Q = np.identity(12)
 
     # F matrix
     F[0:3, 3:6] = delta_t * np.identity(3)
-    F[3:6,6:9] = skew_symmetric(np.dot(C_ns,imu_f.data[k-1]).reshape(3,1))
+    F[3:6,6:9] = skew_symmetric(np.dot(C_ns,(imu_f.data[k-1]-a_b_est[0])).reshape(3,1))
+    Rdt = np.multiply(C_ns,-delta_t)
+    F[3:6,9:12] = Rdt
+    F[3:6,15:18] = delta_t * np.identity(3)
+    F[6:9,12:15] = Rdt
 
+    #print(F.astype(float))
     # Q noise matrix
-    Q = delta_t**2 * np.diag([var_f, var_f, var_f, var_w, var_w, var_w])
+    Q = delta_t**2 * np.diag([var_f, var_f, var_f, var_w, var_w, var_w, var_f, var_f, var_f, var_w, var_w, var_w])
 
     P_cov[k] = (F.dot(P_cov[k-1])).dot(F.T) + (L.dot(Q)).dot(L.T)
 
     if lidar_i < lidar.t.shape[0] and lidar.t[lidar_i] == imu_f.t[k-1]:
-        p_est[k], v_est[k], q_est[k], P_cov[k] = measurement_update(var_lidar, P_cov[k], lidar.data[lidar_i].T, p_est[k], v_est[k], q_est[k])
+        p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k], P_cov[k] = measurement_update(var_lidar, P_cov[k], lidar.data[lidar_i].T, p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k])
         lidar_i += 1
-    if gnss_i < gnss.t.shape[0] and gnss.t[gnss_i] == imu_f.t[k-1]:
-        p_est[k], v_est[k], q_est[k], P_cov[k] = measurement_update(var_gnss, P_cov[k], gnss.data[gnss_i].T, p_est[k], v_est[k], q_est[k])
-        gnss_i += 1
+    # if gnss_i < gnss.t.shape[0] and gnss.t[gnss_i] == imu_f.t[k-1]:
+    #     p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k], P_cov[k] = measurement_update(var_gnss, P_cov[k], gnss.data[gnss_i].T, p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k])
+    #     gnss_i += 1
 
 est_traj_fig = plt.figure()
 ax = est_traj_fig.add_subplot(111, projection='3d')
