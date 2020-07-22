@@ -1,39 +1,22 @@
-import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from helper import *
 
-# Load data 
-with open('data/pt1_data.pkl', 'rb') as file:
-    data = pickle.load(file)
-
-gt = data['gt']         # 6DOF Pose ground truth.
-imu_f = data['imu_f']   # IMU accelerometer measurements
-imf_w = data['imu_w']   # IMU gyroscope measurements
-
-# Correct calibration rotation matrix, corresponding to Euler RPY angles (0.05, 0.05, 0.1).
-# Calibration of lidar ... matching the lidar frame with the global frame.
-C_li = np.array([
-   [ 0.99376, -0.09722,  0.05466],
-   [ 0.09971,  0.99401, -0.04475],
-   [-0.04998,  0.04992,  0.9975 ]
-])
-t_i_li = np.array([0.5, 0.1, 0.5])
-
-lidar.data = C_li.dot(lidar.data.T).T + t_i_li # Transform lidar measurements to the world frame.
+#TODO: Write a function to load data for vectors:
+gt = np.zeros([100, 3])             # 6DOF Pose ground truth.
+imu_f = np.zeros([100, 3])          # IMU accelerometer measurements
+imf_w = np.zeros([100, 3])          # IMU gyroscope measurements
+camera_data = np.zeros([100, 3])    # [px, py, pz, roll, pitch, yaw]
+encoder_data = np.zeros([100, 3])   # [px, py, pz, vx, vy, vz, theta(yaw)]
 
 # White Gaussian Noise parameters for all sensors:
-var_imu_f = 0.1
-var_imu_w = 0.1
-var_gnss = 10.0
-var_lidar = 1.0
-# Square them...
-var_f = var_imu_f**2
-var_w = var_imu_w**2
-
-var_cam = 0.1
-var_enc = 0.1
+var_f = 0.1     # Acceleration noise            - IMU
+var_w = 0.1     # Angular velocity noise        - IMU
+var_a_b = 0.1   # Acceleration bias noise       - IMU
+var_w_b = 0.1   # Angular velocity bias noise   - IMU
+var_cam = 0.1   # Camera                        - Visual Odometry
+var_enc = 0.1   # Encoder                       - Wheel Odometry
 
 g = np.array([0, 0, -9.81]) # Gravity vector
 L = np.zeros([18, 12])
@@ -56,13 +39,13 @@ print("Measurement H_enc:")
 print(H_enc)
 
 # Define vectors and matrices
-p_est = np.zeros([imu_f.data.shape[0], 3])      # keep all position history
-v_est = np.zeros([imu_f.data.shape[0], 3])      # velocity estimates
-q_est = np.zeros([imu_f.data.shape[0], 4])      # orientation estimates as quaternions
-a_b_est = np.zeros([imu_f.data.shape[0], 3])    # acceleration bias estimate
-w_b_est = np.zeros([imu_f.data.shape[0], 3])    # angular velocity bias estimate
-g_est = np.zeros([imu_f.data.shape[0], 3])      # gravity estimate
-P_cov = np.zeros([imu_f.data.shape[0], 18, 18]) # covariance matrices at each timestep
+p_est = np.zeros([imu_f.shape[0], 3])      # keep all position history
+v_est = np.zeros([imu_f.shape[0], 3])      # velocity estimates
+q_est = np.zeros([imu_f.shape[0], 4])      # orientation estimates as quaternions
+a_b_est = np.zeros([imu_f.shape[0], 3])    # acceleration bias estimate
+w_b_est = np.zeros([imu_f.shape[0], 3])    # angular velocity bias estimate
+g_est = np.zeros([imu_f.shape[0], 3])      # gravity estimate
+P_cov = np.zeros([imu_f.shape[0], 18, 18]) # covariance matrices at each timestep
 
 # Initial values -- taken from ground truth.
 p_est[0] = gt.p[0]
@@ -121,8 +104,7 @@ def measurement_update(sensor_var, H, P_cov_est, y_k, p_est, v_est, q_est, ab_es
     return p_upd, v_upd, q_upd, a_b_upd, w_b_upd, g_upd, P_cov_upd
 
 ### Main loop:
-
-for k in range(1, imu_f.data.shape[0]):
+for k in range(1, len(imu_f)):
     delta_t = imu_f.t[k] - imu_f.t[k-1] # time is given in imu_f
 
     # 1. Prediction 
@@ -152,21 +134,18 @@ for k in range(1, imu_f.data.shape[0]):
     F[3:6,15:18] = delta_t * np.identity(3)
     F[6:9,12:15] = Rdt
 
-    #print(F.astype(float))
     # Q noise matrix
-    Q = delta_t**2 * np.diag([var_f, var_f, var_f, var_w, var_w, var_w, var_f, var_f, var_f, var_w, var_w, var_w])
+    Q = delta_t**2 * np.diag([var_f, var_f, var_f, var_w, var_w, var_w, var_a_b, var_a_b, var_a_b, var_w_b, var_w_b, var_w_b])
 
     P_cov[k] = (F.dot(P_cov[k-1])).dot(F.T) + (L.dot(Q)).dot(L.T)
 
     camera = True   # This is true whenever we have camera measuerment
     encoder = True  # This is true whenever we have encoder measurement 
-    camera_data = np.array([0, 0, 0, 0, 0, 0])      # [px, py, pz, roll, pitch, yaw]
-    encoder_data = np.array([0, 0, 0, 0, 0, 0, 0])  # [px, py, pz, vx, vy, vz, theta(yaw)]
 
     if camera == True:
-        p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k], P_cov[k] = measurement_update(var_cam, H_cam, P_cov[k], camera_data, p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k])
+        p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k], P_cov[k] = measurement_update(var_cam, H_cam, P_cov[k], camera_data[k], p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k])
     if encoder == True:
-        p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k], P_cov[k] = measurement_update(var_enc, H_enc, P_cov[k], encoder_data, p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k])
+        p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k], P_cov[k] = measurement_update(var_enc, H_enc, P_cov[k], encoder_data[k], p_est[k], v_est[k], q_est[k], a_b_est[k], w_b_est[k], g_est[k])
 
 est_traj_fig = plt.figure()
 ax = est_traj_fig.add_subplot(111, projection='3d')
