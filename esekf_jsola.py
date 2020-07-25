@@ -4,11 +4,49 @@ from mpl_toolkits.mplot3d import Axes3D
 from helper import *
 
 #TODO: Write a function to load data for vectors:
-gt = np.zeros([100, 3])             # 6DOF Pose ground truth.
-imu_f = np.zeros([100, 3])          # IMU accelerometer measurements
-imf_w = np.zeros([100, 3])          # IMU gyroscope measurements
-camera_data = np.zeros([100, 3])    # [px, py, pz, roll, pitch, yaw]
-encoder_data = np.zeros([100, 3])   # [px, py, pz, vx, vy, vz, theta(yaw)]
+data_length_gt = 100                            
+data_length_imu = 100
+data_length_cam = 100
+data_length_enc = 100
+
+# Allocate vectors
+gt = np.zeros([data_length_gt, 3])              # 6DOF Pose ground truth.
+imu_f = np.zeros([data_length_imu, 3])          # IMU accelerometer measurements
+imf_w = np.zeros([data_length_imu, 3])          # IMU gyroscope measurements
+camera_data = np.zeros([data_length_cam, 6])    # [px, py, pz, roll, pitch, yaw]
+encoder_data = np.zeros([data_length_enc, 6])   # [px, py, pz, vx, vy, vz]
+
+# TODO: Update calibration matrices with real ones.
+
+# Camera
+R_cam = np.array([
+   [ 1, 0, 0],
+   [ 0, 1, 0],
+   [ 0, 0, 1 ]
+])
+t_cam = np.array([0, 0, 0])
+camera_data[:,0:3] = R_cam.dot(camera_data[:,0:3].T).T + t_cam
+camera_data[:,3:6] = R_cam.dot(camera_data[:,3:6].T).T + t_cam
+
+# IMU
+R_imu = np.array([
+   [ 1, 0, 0],
+   [ 0, 1, 0],
+   [ 0, 0, 1 ]
+])
+t_imu = np.array([0, 0, 0])
+
+# Encoder
+R_enc = np.array([
+   [ 1, 0, 0],
+   [ 0, 1, 0],
+   [ 0, 0, 1 ]
+])
+t_enc = np.array([0, 0, 0])
+
+encoder_data[:,0:3] = R_cam.dot(encoder_data[:,0:3].T).T + t_cam # Transform [px, py, pz]
+encoder_data[:,3:6] = R_cam.dot(encoder_data[:,3:6].T).T + t_cam # Transform [vx, vy, vz]
+
 
 # White Gaussian Noise parameters for all sensors:
 var_f = 0.1     # Acceleration noise            - IMU
@@ -26,10 +64,9 @@ H_cam = np.zeros([6, 18])
 H_cam[0:3, 0:3] = np.eye(3)  # measurement model jacobian
 H_cam[3:6, 6:9] = np.eye(3)
 
-H_enc = np.zeros([7,18])
-H_enc[0:3, 0:3] = np.eye(3)
-H_enc[3:6, 3:6] = np.eye(3)
-H_enc[6, 8] = 1
+H_enc = np.zeros([6,18])
+H_enc[0:6, 0:6] = np.eye(6)
+
 
 print("Motion Model Jacobian:")
 print(L)
@@ -72,10 +109,7 @@ print("##############")
 def measurement_update(sensor_var, H, P_cov_est, y_k, p_est, v_est, q_est, ab_estimate, wb_estimate, g_estimate, camera=True):
     
     # Covariance matrix of the sensor
-    if camera == True:
-        R = np.identity(6) * sensor_var # Covariance of Camera
-    else:
-        R = np.identity(7) * sensor_var # Covariance of Encoder
+    R = np.identity(6) * sensor_var
 
     # Compute Kalman Gain:
     K = P_cov_est.dot(H.T).dot(np.linalg.inv(H.dot(P_cov_est).dot(H.T) + R))
