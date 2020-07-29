@@ -78,6 +78,25 @@ class Quaternion():
 
         return R
 
+    def quat_to_euler(self):
+        ysqr = self.y * self.y
+
+        t0 = +2.0 * (self.w * self.x + self.y * self.z)
+        t1 = +1.0 - 2.0 * (self.x * self.x + ysqr)
+        roll = np.degrees(np.arctan2(t0, t1))
+
+        t2 = +2.0 * (self.w * self.y - self.z * self.x)
+        t2 = np.where(t2>+1.0,+1.0,t2)
+
+        t2 = np.where(t2<-1.0, -1.0, t2)
+        pitch = np.degrees(np.arcsin(t2))
+
+        t3 = +2.0 * (self.w * self.z + self.x * self.y)
+        t4 = +1.0 - 2.0 * (ysqr + self.z * self.z)
+        yaw = np.degrees(np.arctan2(t3, t4))
+
+        return np.array([roll, pitch, yaw])
+
     def quat_mul(self, q, out='np', right=True):
         v = np.array([self.x, self.y, self.z]).reshape(3, 1)
         sum_term = np.zeros([4,4])
@@ -90,7 +109,6 @@ class Quaternion():
             sum_term[1:, 1:] = skew_symmetric(v)
 
         sigma = self.w * np.eye(4) + sum_term
-
         if type(q).__name__ == "Quaternion":
             quat_np = np.dot(sigma, q.to_numpy())
         else:
@@ -101,3 +119,31 @@ class Quaternion():
         elif out == 'Quaternion':
             quat_obj = Quaternion(quat_np[0], quat_np[1], quat_np[2], quat_np[3])
             return quat_obj
+    
+    def q2r(self):
+        ''' Convert from quaternion to direct cosine matrix
+        '''
+        #normalize quaternion
+        q_norm = self.w**2 + self.x**2 + self.y**2 + self.z**2
+        q_norm = np.sqrt(q_norm)
+
+        self.w = self.w/q_norm
+        self.x = self.x/q_norm
+        self.y = self.y/q_norm
+        self.z = self.z/q_norm
+
+        a = self.w
+        b = self.x
+        c = self.y
+        d = self.z
+        R = np.zeros([3,3])
+        R[0,0] = a*a+b*b-c*c-d*d
+        R[0,1] = 2*(b*c-a*d)
+        R[0,2] = 2*(b*d+a*c)
+        R[1,0] = 2*(b*c+a*d)
+        R[1,1] = a*a-b*b+c*c-d*d
+        R[1,2] = 2*(c*d-a*b)
+        R[2,0] =  2*(b*d-a*c)
+        R[2,1] = 2*(c*d+a*b)
+        R[2,2] = a*a-b*b-c*c+d*d
+        return R
