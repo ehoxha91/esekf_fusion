@@ -4,8 +4,8 @@ This repository is getting updated everyday...
 
 ### Code
 
--`ms_ekf.py`      - Will implement Multi-Rate Kalman Filter.
--`esekf_jsola.py` - Implementation of esekf based on J. Sola's work(not tested).
+- `ms_ekf.py`      - Will implement Multi-Rate Kalman Filter.
+- `esekf_jsola.py` - Implementation of esekf based on J. Sola's work(not tested).
 
 ### Datasets
 
@@ -17,6 +17,6 @@ This repository is getting updated everyday...
 #### TUM MH_01_easy dataset
 
 - Inside folder data/imu0/ you can find:
--`data.csv` which contains imu data
--`f_mono.txt` which contains visual pose generated using new ORB-SLAM3
--`ground_truth.csv` contains ground truth.
+- `data.csv` which contains imu data
+- `f_mono.txt` which contains visual pose generated using new ORB-SLAM3
+- `ground_truth.csv` contains ground truth.
