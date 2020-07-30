@@ -88,15 +88,18 @@ g = np.array([-0.0885830961309836, 0.350638111726515, 9.80333136998259])
 
 def preditct(i, dt, w, a):
     global g
-    OM = 0.5*np.array(
+    # Omega_w does the differentiation step for quaternion  q' = q (x) q{w} = Omega_w(w)q
+    Omega_w = 0.5*np.array(
         [[0, -w[0], -w[1], -w[2]],
          [w[0], 0, w[2], -w[1]],
          [w[1], -w[2], 0, w[0]],
          [w[2], w[1], -w[0], 0]], dtype=np.float64)
 
-    p_est[i] = p_est[i-1] + dt*v_est[i-1]    # position update
-    v_est[i] = v_est[i-1] + dt*((Quaternion(*q_est[i-1]).q2r()).dot(a-a_b_est[i-1])-g)
-    q_est[i] = q_est[i-1] + dt*OM.dot(q_est[i-1])
+    # Simple Euler integration
+    accel = ((Quaternion(*q_est[i-1]).q2r()).dot(a-a_b_est[i-1])-g)
+    p_est[i] = p_est[i-1] + dt*v_est[i-1] + 0.5*(dt**2)*accel   # position update
+    v_est[i] = v_est[i-1] + dt*accel
+    q_est[i] = q_est[i-1] + dt*Omega_w.dot(q_est[i-1])
     a_b_est[i] = 0
     w_b_est[i] = 0
     return p_est[i], v_est[i], q_est[i], a_b_est[i], w_b_est[i]

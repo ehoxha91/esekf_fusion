@@ -108,7 +108,7 @@ class Quaternion():
         else:
             sum_term[1:, 1:] = skew_symmetric(v)
 
-        sigma = self.w * np.eye(4) + sum_term
+        sigma = sum_term #self.w * np.eye(4) + sum_term
         if type(q).__name__ == "Quaternion":
             quat_np = np.dot(sigma, q.to_numpy())
         else:
@@ -126,12 +126,10 @@ class Quaternion():
         #normalize quaternion
         q_norm = self.w**2 + self.x**2 + self.y**2 + self.z**2
         q_norm = np.sqrt(q_norm)
-
         self.w = self.w/q_norm
         self.x = self.x/q_norm
         self.y = self.y/q_norm
         self.z = self.z/q_norm
-
         a = self.w
         b = self.x
         c = self.y
