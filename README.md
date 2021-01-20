@@ -1,6 +1,5 @@
 # esekf_fusion
-
-This repository is getting updated everyday...
+...returning soon
 
 ### Code
 
